@@ -24,7 +24,7 @@ class VisualizationTests(unittest.TestCase):
         )
 
     def test_visualize_history_creates_metric_and_loss_images(self):
-        phases = ("representation_warmup", "joint_pretrain", "clustering")
+        phases = ("pretraining", "pretraining", "clustering")
         history = []
         for round_number in range(1, 4):
             history.append(
@@ -57,20 +57,17 @@ class VisualizationTests(unittest.TestCase):
                 self.assertTrue(path.exists())
                 self.assertGreater(path.stat().st_size, 0)
 
-    def test_three_stage_boundaries_are_detected(self):
+    def test_two_stage_boundary_is_detected(self):
         history = [
-            {"round": 1, "phase": "representation_warmup", "train": {}},
-            {"round": 2, "phase": "joint_pretrain", "train": {}},
-            {"round": 3, "phase": "joint_pretrain", "train": {}},
+            {"round": 1, "phase": "pretraining", "train": {}},
+            {"round": 2, "phase": "pretraining", "train": {}},
+            {"round": 3, "phase": "pretraining", "train": {}},
             {"round": 4, "phase": "clustering", "train": {}},
         ]
         boundaries = _phase_boundaries(history)
         self.assertEqual(
             [(item[0], item[1]) for item in boundaries],
-            [
-                (1.5, "Joint pretraining starts"),
-                (3.5, "Formal clustering starts"),
-            ],
+            [(3.5, "Clustering stage starts")],
         )
 
 

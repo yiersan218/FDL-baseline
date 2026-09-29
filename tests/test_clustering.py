@@ -19,6 +19,7 @@ from config import (  # noqa: E402
 )
 from flcore.servers.servercluster import (  # noqa: E402
     FederatedMultiViewClusteringServer,
+    pretraining_clustering_scale,
     progress_report_gap,
 )
 from flcore.trainmodel.multiview import MultiViewClusteringModel, clustering_objective  # noqa: E402
@@ -34,117 +35,52 @@ class ClusteringProjectTests(unittest.TestCase):
 
     def test_all_dataset_configs_load(self):
         configs = [load_config(path) for path in DEFAULT_CONFIG_DIR.glob("*.json")]
-        self.assertEqual(len(configs), 7)
+        self.assertEqual(len(configs), 6)
         self.assertEqual(
             {config["dataset"]["name"] for config in configs},
-            {"ALOI_100", "flower17", "HW", "LandUse_21", "Mfeat", "NUSWIDE", "Scene-15"},
+            {"ALOI_100", "flower17", "LandUse_21", "Mfeat", "NUSWIDE", "Scene-15"},
         )
         for config in configs:
             training = config["training"]
-            self.assertGreaterEqual(training["representation_warmup_rounds"], 0)
+            self.assertGreaterEqual(training["center_init_round"], 0)
             self.assertLessEqual(
-                training["representation_warmup_rounds"],
+                training["center_init_round"],
                 training["pretrain_rounds"],
             )
-            self.assertGreater(training["joint_learning_rate"], 0)
-            self.assertGreater(training["warmup_local_epochs"], 0)
-            self.assertGreater(training["joint_local_epochs"], 0)
+            self.assertGreater(training["pretraining_end_learning_rate"], 0)
+            self.assertGreater(training["pretraining_local_epochs"], 0)
             self.assertGreater(training["clustering_local_epochs"], 0)
             self.assertGreater(training["cluster_head_learning_rate_multiplier"], 0)
             self.assertGreaterEqual(training["center_momentum"], 0)
             self.assertLess(training["center_momentum"], 1)
+            for value in config["loss_weights"].values():
+                self.assertGreater(float(value), 0)
 
-    def test_backup_dataset_configs_load(self):
+    def test_backup_dataset_config_loads(self):
         configs = [load_config(path) for path in BACKUP_CONFIG_DIR.glob("*.json")]
         self.assertEqual(len(configs), 1)
-        self.assertEqual(
-            {config["dataset"]["name"] for config in configs},
-            {"animal"},
-        )
+        self.assertEqual(configs[0]["dataset"]["name"], "animal")
+        for value in configs[0]["loss_weights"].values():
+            self.assertGreater(float(value), 0)
 
-    def test_scene15_stable_tuned_schedule(self):
+    def test_scene15_two_stage_schedule(self):
         config = load_config(DEFAULT_CONFIG_DIR / "Scene-15.json")
         training = config["training"]
         self.assertEqual(training["rounds"], 30)
         self.assertEqual(training["pretrain_rounds"], 22)
-        self.assertEqual(training["representation_warmup_rounds"], 14)
+        self.assertEqual(training["center_init_round"], 14)
         self.assertEqual(training["local_epochs"], 2)
-        self.assertEqual(training["warmup_local_epochs"], 2)
-        self.assertEqual(training["joint_local_epochs"], 3)
+        self.assertEqual(training["pretraining_local_epochs"], 2)
         self.assertEqual(training["clustering_local_epochs"], 3)
-        self.assertEqual(training["joint_learning_rate"], 5e-8)
+        self.assertEqual(training["pretraining_end_learning_rate"], 5e-8)
         self.assertEqual(training["clustering_learning_rate"], 5e-8)
         self.assertEqual(training["center_momentum"], 0.99875)
         self.assertEqual(config["loss_weights"]["clustering"], 0.05)
-        self.assertEqual(config["loss_weights"]["balance"], 0.0)
-
-    def test_base_overrides_refresh_inherited_stage_parameters(self):
-        config = apply_overrides(
-            load_config(DEFAULT_CONFIG_DIR / "HW.json"),
-            ["training.local_epochs=1", "training.learning_rate=0.01"],
-        )
-        training = config["training"]
-        self.assertEqual(training["local_epochs"], 1)
-        self.assertEqual(training["warmup_local_epochs"], 1)
-        self.assertEqual(training["joint_local_epochs"], 1)
-        self.assertEqual(training["clustering_local_epochs"], 1)
-        self.assertEqual(training["learning_rate"], 0.01)
-        self.assertEqual(training["joint_learning_rate"], 0.001)
-        self.assertEqual(training["clustering_learning_rate"], 2e-5)
-
-        import json
-        import tempfile
-
-        raw_config = json.loads(
-            (DEFAULT_CONFIG_DIR / "ALOI_100.json").read_text(encoding="utf-8")
-        )
-        raw_config["training"].pop("joint_learning_rate", None)
-        raw_config["training"].pop("clustering_learning_rate", None)
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            inherited_path = Path(temporary_directory) / "inherited.json"
-            inherited_path.write_text(
-                json.dumps(raw_config),
-                encoding="utf-8",
-            )
-            inherited = apply_overrides(
-                load_config(inherited_path),
-                ["training.learning_rate=0.01"],
-            )["training"]
-        self.assertEqual(inherited["joint_learning_rate"], 0.001)
-        self.assertEqual(inherited["clustering_learning_rate"], 0.01)
-
-    def test_base_overrides_preserve_explicit_stage_parameters(self):
-        config = apply_overrides(
-            load_config(DEFAULT_CONFIG_DIR / "Scene-15.json"),
-            ["training.local_epochs=1", "training.learning_rate=0.01"],
-        )
-        training = config["training"]
-        self.assertEqual(training["local_epochs"], 1)
-        self.assertEqual(training["warmup_local_epochs"], 2)
-        self.assertEqual(training["joint_local_epochs"], 3)
-        self.assertEqual(training["clustering_local_epochs"], 3)
-        self.assertEqual(training["learning_rate"], 0.01)
-        self.assertEqual(training["joint_learning_rate"], 5e-8)
-
-    def test_explicit_stage_override_wins_and_stops_inheriting(self):
-        config = apply_overrides(
-            load_config(DEFAULT_CONFIG_DIR / "HW.json"),
-            ["training.local_epochs=1", "training.joint_local_epochs=3"],
-        )
-        training = config["training"]
-        self.assertEqual(training["warmup_local_epochs"], 1)
-        self.assertEqual(training["joint_local_epochs"], 3)
-        self.assertEqual(training["clustering_local_epochs"], 1)
-
-        config = apply_overrides(config, ["training.local_epochs=4"])
-        training = config["training"]
-        self.assertEqual(training["warmup_local_epochs"], 4)
-        self.assertEqual(training["joint_local_epochs"], 3)
-        self.assertEqual(training["clustering_local_epochs"], 4)
+        self.assertEqual(config["loss_weights"]["balance"], 0.05)
 
     def test_initial_configs_use_common_hyperparameters(self):
         configs = [load_config(path) for path in INIT_CONFIG_DIR.glob("*.json")]
-        self.assertEqual(len(configs), 7)
+        self.assertEqual(len(configs), 6)
         common_sections = []
         for config in configs:
             common_sections.append(
@@ -212,7 +148,7 @@ class ClusteringProjectTests(unittest.TestCase):
         self.assertEqual(outputs["assignments"].shape, (12, 3))
         self.assertIn("clustering", metrics)
 
-    def test_joint_pretraining_scales_clustering_terms(self):
+    def test_pretraining_scales_clustering_terms(self):
         model = MultiViewClusteringModel([8, 5], 3, [6], 4)
         views = (torch.randn(12, 8), torch.randn(12, 5))
         outputs = model(views)
@@ -238,6 +174,72 @@ class ClusteringProjectTests(unittest.TestCase):
         self.assertTrue(torch.allclose(disabled_loss, zero_scale_loss))
         self.assertEqual(metrics["clustering_weight_scale"], 0.0)
         self.assertGreaterEqual(metrics["clustering"], 0.0)
+
+    def test_two_stage_pretraining_scale(self):
+        self.assertEqual(pretraining_clustering_scale(1, 2, 4), 0.0)
+        self.assertEqual(pretraining_clustering_scale(2, 2, 4), 0.0)
+        self.assertEqual(pretraining_clustering_scale(3, 2, 4), 0.5)
+        self.assertEqual(pretraining_clustering_scale(4, 2, 4), 1.0)
+        self.assertEqual(pretraining_clustering_scale(5, 2, 4), 1.0)
+
+    def test_base_overrides_refresh_inherited_two_stage_parameters(self):
+        import json
+        import tempfile
+
+        raw_config = json.loads(
+            (DEFAULT_CONFIG_DIR / "ALOI_100.json").read_text(encoding="utf-8")
+        )
+        for key in (
+            "pretraining_local_epochs",
+            "clustering_local_epochs",
+            "pretraining_end_learning_rate",
+            "clustering_learning_rate",
+        ):
+            raw_config["training"].pop(key, None)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inherited.json"
+            path.write_text(json.dumps(raw_config), encoding="utf-8")
+            config = apply_overrides(
+                load_config(path),
+                ["training.local_epochs=3", "training.learning_rate=0.01"],
+            )
+        training = config["training"]
+        self.assertEqual(training["pretraining_local_epochs"], 3)
+        self.assertEqual(training["clustering_local_epochs"], 3)
+        self.assertEqual(training["pretraining_end_learning_rate"], 0.001)
+        self.assertEqual(training["clustering_learning_rate"], 0.01)
+
+    def test_base_overrides_preserve_explicit_two_stage_parameters(self):
+        config = apply_overrides(
+            load_config(DEFAULT_CONFIG_DIR / "Scene-15.json"),
+            ["training.local_epochs=1", "training.learning_rate=0.01"],
+        )
+        training = config["training"]
+        self.assertEqual(training["pretraining_local_epochs"], 2)
+        self.assertEqual(training["clustering_local_epochs"], 3)
+        self.assertEqual(training["pretraining_end_learning_rate"], 5e-8)
+        self.assertEqual(training["clustering_learning_rate"], 5e-8)
+
+    def test_explicit_two_stage_override_stops_inheriting(self):
+        import json
+        import tempfile
+
+        raw_config = json.loads(
+            (DEFAULT_CONFIG_DIR / "ALOI_100.json").read_text(encoding="utf-8")
+        )
+        for key in ("pretraining_local_epochs", "clustering_local_epochs"):
+            raw_config["training"].pop(key, None)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inherited.json"
+            path.write_text(json.dumps(raw_config), encoding="utf-8")
+            config = apply_overrides(
+                load_config(path),
+                ["training.local_epochs=1", "training.pretraining_local_epochs=3"],
+            )
+            config = apply_overrides(config, ["training.local_epochs=4"])
+        training = config["training"]
+        self.assertEqual(training["pretraining_local_epochs"], 3)
+        self.assertEqual(training["clustering_local_epochs"], 4)
 
     def test_fixed_dec_target_is_accepted_and_shape_checked(self):
         model = MultiViewClusteringModel([8, 5], 3, [6], 4)

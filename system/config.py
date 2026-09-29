@@ -10,11 +10,7 @@ BACKUP_CONFIG_DIR = DEFAULT_CONFIG_DIR / "backup"
 
 
 class ExperimentConfig(dict):
-    """Dictionary config retaining which stage values came from defaults.
-
-    The provenance is stored as an object attribute, so it is not written to
-    summary.json with the user-facing configuration.
-    """
+    """Configuration retaining which two-stage values came from defaults."""
 
     def __init__(self, *args, inherited_training_keys=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -47,20 +43,18 @@ def load_config(config_name_or_path):
 
     config = ExperimentConfig(copy.deepcopy(config))
     training = config.get("training", {})
-    training.setdefault("representation_warmup_rounds", 1)
+    training.setdefault("center_init_round", 1)
     if "local_epochs" in training:
-        for key in (
-            "warmup_local_epochs",
-            "joint_local_epochs",
-            "clustering_local_epochs",
-        ):
+        for key in ("pretraining_local_epochs", "clustering_local_epochs"):
             if key not in training:
                 training[key] = training["local_epochs"]
                 config.inherited_training_keys.add(key)
     if "learning_rate" in training:
-        if "joint_learning_rate" not in training:
-            training["joint_learning_rate"] = float(training["learning_rate"]) * 0.1
-            config.inherited_training_keys.add("joint_learning_rate")
+        if "pretraining_end_learning_rate" not in training:
+            training["pretraining_end_learning_rate"] = (
+                float(training["learning_rate"]) * 0.1
+            )
+            config.inherited_training_keys.add("pretraining_end_learning_rate")
         if "clustering_learning_rate" not in training:
             training["clustering_learning_rate"] = float(training["learning_rate"])
             config.inherited_training_keys.add("clustering_learning_rate")
@@ -87,24 +81,33 @@ def _validate_config(config):
             raise ValueError(f"Missing training.{key}")
     if training["pretrain_rounds"] >= training["rounds"]:
         raise ValueError("training.pretrain_rounds must be smaller than training.rounds")
-    representation_warmup_rounds = int(training["representation_warmup_rounds"])
-    if not 0 <= representation_warmup_rounds <= int(training["pretrain_rounds"]):
+    legacy_keys = {
+        "representation_warmup_rounds",
+        "warmup_local_epochs",
+        "joint_local_epochs",
+        "joint_learning_rate",
+    }.intersection(training)
+    if legacy_keys:
         raise ValueError(
-            "training.representation_warmup_rounds must be in "
-            "[0, training.pretrain_rounds]"
+            "Three-stage training keys are no longer supported: "
+            f"{sorted(legacy_keys)}"
+        )
+    center_init_round = int(training["center_init_round"])
+    if not 0 <= center_init_round <= int(training["pretrain_rounds"]):
+        raise ValueError(
+            "training.center_init_round must be in [0, training.pretrain_rounds]"
         )
     if not 0 < float(training["join_ratio"]) <= 1:
         raise ValueError("training.join_ratio must be in (0, 1]")
     if training.get("selection_metric", "nmi") not in {"acc", "nmi", "ari"}:
         raise ValueError("training.selection_metric must be acc, nmi, or ari")
-    if float(training.get("clustering_learning_rate", training["learning_rate"])) <= 0:
+    if float(training["clustering_learning_rate"]) <= 0:
         raise ValueError("training.clustering_learning_rate must be positive")
-    if float(training["joint_learning_rate"]) <= 0:
-        raise ValueError("training.joint_learning_rate must be positive")
+    if float(training["pretraining_end_learning_rate"]) <= 0:
+        raise ValueError("training.pretraining_end_learning_rate must be positive")
     for key in (
         "local_epochs",
-        "warmup_local_epochs",
-        "joint_local_epochs",
+        "pretraining_local_epochs",
         "clustering_local_epochs",
     ):
         if int(training[key]) <= 0:
@@ -127,7 +130,7 @@ def resolve_project_path(path_value):
 
 
 def apply_overrides(config, overrides):
-    """Apply dotted-key overrides and refresh inherited stage parameters."""
+    """Apply dotted-key overrides and refresh inherited two-stage values."""
     result = copy.deepcopy(config)
     parsed_overrides = []
     for expression in overrides or []:
@@ -156,32 +159,25 @@ def apply_overrides(config, overrides):
     inherited_training_keys = getattr(result, "inherited_training_keys", set())
     training = result["training"]
     if "training.local_epochs" in overridden_keys:
-        for key in (
-            "warmup_local_epochs",
-            "joint_local_epochs",
-            "clustering_local_epochs",
-        ):
-            if (
-                key in inherited_training_keys
-                and f"training.{key}" not in overridden_keys
-            ):
+        for key in ("pretraining_local_epochs", "clustering_local_epochs"):
+            if key in inherited_training_keys and f"training.{key}" not in overridden_keys:
                 training[key] = training["local_epochs"]
-    if (
-        "training.learning_rate" in overridden_keys
-        and "joint_learning_rate" in inherited_training_keys
-        and "training.joint_learning_rate" not in overridden_keys
-    ):
-        training["joint_learning_rate"] = float(training["learning_rate"]) * 0.1
-    if (
-        "training.learning_rate" in overridden_keys
-        and "clustering_learning_rate" in inherited_training_keys
-        and "training.clustering_learning_rate" not in overridden_keys
-    ):
-        training["clustering_learning_rate"] = float(training["learning_rate"])
+    if "training.learning_rate" in overridden_keys:
+        if (
+            "pretraining_end_learning_rate" in inherited_training_keys
+            and "training.pretraining_end_learning_rate" not in overridden_keys
+        ):
+            training["pretraining_end_learning_rate"] = (
+                float(training["learning_rate"]) * 0.1
+            )
+        if (
+            "clustering_learning_rate" in inherited_training_keys
+            and "training.clustering_learning_rate" not in overridden_keys
+        ):
+            training["clustering_learning_rate"] = float(training["learning_rate"])
 
     for dotted_key in overridden_keys:
-        prefix = "training."
-        if dotted_key.startswith(prefix):
-            inherited_training_keys.discard(dotted_key[len(prefix):])
+        if dotted_key.startswith("training."):
+            inherited_training_keys.discard(dotted_key[len("training."):])
     _validate_config(result)
     return result

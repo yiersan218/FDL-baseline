@@ -44,23 +44,24 @@ class FederatedClusteringClient:
         global_model,
         clustering_enabled,
         round_index,
-        formal_training=False,
+        phase,
         clustering_weight_scale=1.0,
     ):
+        if phase not in {"pretraining", "clustering"}:
+            raise ValueError(f"Unknown training phase: {phase}")
         model = copy.deepcopy(global_model).to(self.device)
         target_cache = self.local_target_cache(model) if clustering_enabled else None
         model.train()
         training = self.config["training"]
         learning_rate = float(training["learning_rate"])
-        local_epochs = int(training.get("warmup_local_epochs", training["local_epochs"]))
-        if formal_training:
-            learning_rate = float(training.get("clustering_learning_rate", learning_rate))
-            local_epochs = int(
-                training.get("clustering_local_epochs", training["local_epochs"])
-            )
+        local_epochs = int(training["pretraining_local_epochs"])
+        if phase == "clustering":
+            learning_rate = float(training["clustering_learning_rate"])
+            local_epochs = int(training["clustering_local_epochs"])
         elif clustering_enabled:
-            learning_rate = float(training.get("joint_learning_rate", learning_rate))
-            local_epochs = int(training.get("joint_local_epochs", training["local_epochs"]))
+            # Center initialization and the LR milestone are internal events of
+            # the single pretraining stage, not a separate train phase.
+            learning_rate = float(training["pretraining_end_learning_rate"])
         head_learning_rate = learning_rate * float(
             training.get("cluster_head_learning_rate_multiplier", 1.0)
         )

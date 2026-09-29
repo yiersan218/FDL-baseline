@@ -21,6 +21,19 @@ def progress_report_gap(total_rounds):
     return max(1, int(np.ceil(int(total_rounds) / 10.0)))
 
 
+def pretraining_clustering_scale(round_number, center_init_round, pretrain_rounds):
+    """Return the gradual clustering-loss weight inside pretraining."""
+    round_number = int(round_number)
+    center_init_round = int(center_init_round)
+    pretrain_rounds = int(pretrain_rounds)
+    if round_number <= center_init_round:
+        return 0.0
+    if round_number > pretrain_rounds:
+        return 1.0
+    active_rounds = max(pretrain_rounds - center_init_round, 1)
+    return min(1.0, (round_number - center_init_round) / active_rounds)
+
+
 class FederatedMultiViewClusteringServer:
     def __init__(self, data, config, device):
         self.data = data
@@ -158,39 +171,29 @@ class FederatedMultiViewClusteringServer:
     def train(self):
         rounds = int(self.training["rounds"])
         pretrain_rounds = int(self.training["pretrain_rounds"])
-        representation_warmup_rounds = int(
-            self.training.get("representation_warmup_rounds", 1)
-        )
+        center_init_round = int(self.training["center_init_round"])
         eval_gap = int(self.training.get("eval_gap", 1))
         report_gap = progress_report_gap(rounds)
         started = time.time()
         for round_index in range(rounds):
-            if round_index == representation_warmup_rounds and not self.centers_initialized:
+            if round_index == center_init_round and not self.centers_initialized:
                 print("Initializing global cluster centers from client summaries ...")
                 self._initialize_centers()
-            formal_training = round_index >= pretrain_rounds
+            round_number = round_index + 1
+            phase = "clustering" if round_index >= pretrain_rounds else "pretraining"
             clustering_enabled = self.centers_initialized
-            if clustering_enabled and not formal_training:
-                joint_rounds = max(pretrain_rounds - representation_warmup_rounds, 1)
-                completed_joint_rounds = round_index - representation_warmup_rounds + 1
-                clustering_weight_scale = min(
-                    1.0,
-                    completed_joint_rounds / joint_rounds,
-                )
-                phase = "joint_pretrain"
-            elif formal_training:
-                clustering_weight_scale = 1.0
-                phase = "clustering"
-            else:
-                clustering_weight_scale = 0.0
-                phase = "representation_warmup"
+            clustering_weight_scale = pretraining_clustering_scale(
+                round_number,
+                center_init_round,
+                pretrain_rounds,
+            ) if clustering_enabled else 0.0
             selected = self._selected_clients()
             updates = [
                 client.train(
                     self.global_model,
                     clustering_enabled,
                     round_index,
-                    formal_training=formal_training,
+                    phase=phase,
                     clustering_weight_scale=clustering_weight_scale,
                 )
                 for client in selected
@@ -200,15 +203,15 @@ class FederatedMultiViewClusteringServer:
             record = {
                 "round": round_index + 1,
                 "phase": phase,
+                "center_initialized": self.centers_initialized,
                 "clients": [client.id for client in selected],
                 "train": train_metrics,
                 "elapsed_seconds": time.time() - started,
             }
             if (round_index + 1) % eval_gap == 0 or round_index + 1 == rounds:
                 record["clustering"] = self.evaluate()
-                self._update_best(record["clustering"], round_index + 1, formal_training)
+                self._update_best(record["clustering"], round_index + 1, phase)
             self.history.append(record)
-            round_number = round_index + 1
             if round_number % report_gap == 0 or round_number == rounds:
                 clustering = record.get("clustering", {})
                 print(
@@ -224,8 +227,8 @@ class FederatedMultiViewClusteringServer:
         final_metrics = self.evaluate()
         return self._save(final_metrics)
 
-    def _update_best(self, metrics, round_number, formal_training):
-        if not formal_training:
+    def _update_best(self, metrics, round_number, phase):
+        if phase != "clustering":
             return
         selection_metric = self.training.get("selection_metric", "nmi")
         if selection_metric not in metrics:

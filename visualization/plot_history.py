@@ -37,13 +37,12 @@ def _validate_history(history):
 
 
 PHASE_BOUNDARY_STYLES = (
-    ("joint_pretrain", "Joint pretraining starts", "#7c3aed", "-."),
-    ("clustering", "Formal clustering starts", "#6b7280", "--"),
+    ("clustering", "Clustering stage starts", "#6b7280", "--"),
 )
 
 
 def _phase_boundaries(history):
-    """Return boundaries for every trainable clustering phase in the history."""
+    """Return the boundary between pretraining and clustering."""
     boundaries = []
     for phase, label, color, linestyle in PHASE_BOUNDARY_STYLES:
         for record in history:

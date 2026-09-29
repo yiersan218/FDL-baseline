@@ -22,6 +22,3 @@ __pycache__/
 # Generated visualization artifacts
 visualization/output/
 visualization/result/
-
-# Temporary tuning candidates
-results-3阶段/tuning/
