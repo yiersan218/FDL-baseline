@@ -1,0 +1,27 @@
+# Local-only instructions
+Instructions.md
+非提交开发日志.txt
+
+# Dataset binaries; keep dataset documentation trackable
+dataset/*.mat
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS and IDE metadata
+.DS_Store
+.idea/
+
+# Model checkpoints
+*.pt
+
+# Generated visualization artifacts
+visualization/output/
+visualization/result/
+
+# Temporary tuning candidates
+results-3阶段/tuning/
